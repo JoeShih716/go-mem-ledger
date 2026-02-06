@@ -1,0 +1,6 @@
+mysql:
+  host: "ledger-mysql"       # Docker Compose 中的 Service Name
+  port: 3306
+  user: "user"
+  password: "password"
+  dbname: "ledger_db"

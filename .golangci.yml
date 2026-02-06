@@ -1,0 +1,28 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    - bodyclose
+    - noctx
+    - gocyclo
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - unparam
+
+linters-settings:
+  gocyclo:
+    min-complexity: 20
+  goimports:
+    local-prefixes: github.com/JoeShih716/go-mem-ledger

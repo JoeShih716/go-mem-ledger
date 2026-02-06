@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package pb;
+
+option go_package = "github.com/JoeShih716/go-mem-ledger/pb";
+
+// LedgerService 核心帳務服務
+service LedgerService {
+  // Transfer 單筆交易 (存款/提款/轉帳)
+  rpc Transfer (TransferRequest) returns (TransferResponse);
+
+  // BatchTransfer 批次交易 (高性能通道)
+  rpc BatchTransfer (BatchTransferRequest) returns (BatchTransferResponse);
+
+  // GetBalance 查詢餘額
+  rpc GetBalance (GetBalanceRequest) returns (GetBalanceResponse);
+}
+
+enum TransactionType {
+  // 為了安全預設 UNKNOWN
+  UNKNOWN = 0;
+  DEPOSIT = 1;
+  WITHDRAW = 2;
+  TRANSFER = 3;
+}
+
+message TransferRequest {
+  string ref_id = 1;         // Client 端的 UUID
+  TransactionType type = 2;  // 交易類型
+  int64 from_account_id = 3; // 來源帳號 (DEPOSIT 時可忽略或填空)
+  int64 to_account_id = 4;   // 目標帳號 (WITHDRAW 時可忽略)
+  int64 amount = 5;          // 金額 (定點數, 放大 10000 倍)
+}
+
+message TransferResponse {
+  bool success = 1;
+  string message = 2; // e.g. "insufficient balance"
+  int64 current_balance = 3; // 交易後餘額 (若是轉帳，回傳 from 的餘額)
+}
+
+message BatchTransferRequest {
+  repeated TransferRequest requests = 1;
+}
+
+message BatchTransferResponse {
+  repeated TransferResponse responses = 1;
+}
+
+message GetBalanceRequest {
+  int64 account_id = 1;
+}
+
+message GetBalanceResponse {
+  int64 balance = 1;
+}
