@@ -7,14 +7,14 @@ services:
       dockerfile: Dockerfile
     container_name: go-mem-ledger
     ports:
-      - "8080:8080"
+      - "50051:50051"
     volumes:
       - .:/app
     environment:
       - MYSQL_DSN=user:password@tcp(mysql:3306)/ledger_db?charset=utf8mb4&parseTime=True&loc=Local
     depends_on:
       - mysql
-    command: ["go", "run", "cmd/server/main.go"] # 開發模式直接 run
+    command: ["go", "run", "cmd/core/main.go"] # 開發模式直接 run
 
   mysql:
     image: mysql:8.0

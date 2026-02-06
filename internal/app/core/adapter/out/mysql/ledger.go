@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/JoeShih716/go-mem-ledger/internal/domain"
-	"github.com/JoeShih716/go-mem-ledger/internal/usecase"
+	"github.com/JoeShih716/go-mem-ledger/internal/app/core/domain"
+	"github.com/JoeShih716/go-mem-ledger/internal/app/core/usecase"
 	"github.com/JoeShih716/go-mem-ledger/pkg/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -24,9 +24,9 @@ func (*sqlUser) TableName() string {
 
 // sqlTransaction 對應資料庫的 transactions 表
 type sqlTransaction struct {
-	ID            int64    `gorm:"primaryKey;autoIncrement"`
-	RefID         [16]byte `gorm:"column:ref_id;type:binary(16);uniqueIndex"` // 對應 domain.TransactionID
-	Sequence      uint64   `gorm:"index"`
+	ID            int64  `gorm:"primaryKey;autoIncrement"`
+	RefID         []byte `gorm:"column:ref_id;type:binary(16);uniqueIndex"` // 對應 domain.TransactionID
+	Sequence      uint64 `gorm:"index"`
 	FromAccountID int64
 	ToAccountID   int64
 	Amount        int64
@@ -52,7 +52,7 @@ func (ledger *MySQLLedger) PostTransaction(ctx context.Context, tran *domain.Tra
 	err := ledger.client.DB().Transaction(func(tx *gorm.DB) error {
 		// 先檢查是否有這筆交易記錄
 		var transaction sqlTransaction
-		err := tx.Where("ref_id = ?", tran.TransactionID).First(&transaction).Error
+		err := tx.Where("ref_id = ?", tran.TransactionID[:]).First(&transaction).Error
 		if err == nil {
 			fmt.Println("已有該紀錄 回傳成功")
 			return nil
@@ -60,7 +60,7 @@ func (ledger *MySQLLedger) PostTransaction(ctx context.Context, tran *domain.Tra
 		if err == gorm.ErrRecordNotFound {
 			fmt.Println("沒有該紀錄 可以繼續執行")
 		} else {
-			fmt.Println("查詢交易錯誤")
+			fmt.Printf("查詢交易錯誤: %v\n", err)
 			return domain.ErrSelectTransactionFailed
 		}
 		// 取得鎖定帳號 以及lockID 悲觀鎖
@@ -117,7 +117,7 @@ func (ledger *MySQLLedger) PostTransaction(ctx context.Context, tran *domain.Tra
 		}
 		// 建立交易紀錄
 		transaction = sqlTransaction{
-			RefID:         tran.TransactionID,
+			RefID:         tran.TransactionID[:],
 			Sequence:      tran.Sequence,
 			FromAccountID: tran.From,
 			ToAccountID:   tran.To,

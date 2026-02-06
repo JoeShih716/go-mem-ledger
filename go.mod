@@ -1,10 +1,12 @@
 module github.com/JoeShih716/go-mem-ledger
 
-go 1.25.3
+go 1.24
 
 require (
+	github.com/google/uuid v1.6.0
 	google.golang.org/grpc v1.70.0
 	google.golang.org/protobuf v1.36.11
+	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.31.1
 )

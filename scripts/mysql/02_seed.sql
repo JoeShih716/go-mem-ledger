@@ -9,7 +9,7 @@ CREATE PROCEDURE SeedUsers(IN num_users INT)
 BEGIN
     DECLARE i INT DEFAULT 1;
     DECLARE current_ts BIGINT;
-    SET current_ts = UNIX_TIMESTAMP();
+    SET current_ts = UNIX_TIMESTAMP() * 1000;
 
     -- 使用 Transaction 加速插入
     START TRANSACTION;

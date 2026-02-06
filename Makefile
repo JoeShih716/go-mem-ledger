@@ -44,3 +44,20 @@ gen-proto: ## Generate Protobuf & gRPC code
     --go-grpc_out=. --go-grpc_opt=paths=source_relative \
     proto/ledger.proto
 	@echo "Done!"
+
+# ==============================================================================
+# Docker Compose
+# ==============================================================================
+##@ Docker Compose
+
+.PHONY: docker-up
+docker-up: ## Start local dev environment (Air hot-reload)
+	docker-compose up -d --build
+
+.PHONY: docker-down
+docker-down: ## Stop local dev environment
+	docker-compose down
+
+.PHONY: docker-logs
+docker-logs: ## Tail docker-compose logs
+	docker-compose logs -f

@@ -16,4 +16,4 @@ COPY go.mod ./
 COPY . .
 
 # 預設指令 (會被 docker-compose command 覆蓋)
-CMD ["go", "run", "cmd/server/main.go"]
+CMD ["go", "run", "cmd/core/main.go"]

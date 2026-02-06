@@ -33,3 +33,17 @@ Core 負責處理業務邏輯
 domain不該知道使用MySQL 這樣才符合Clean Architecture
 
 
+### 5. 伺服器入口與微服務架構 (Server Architecture)
+為了驗證一條龍流程 (MySQLLedger -> UseCase -> gRPC)，原本想直接寫 `cmd/server/main.go`。
+但考慮到未來會有 **Core** (帳務核心) 和 **Connector** (Gateway) 兩個服務，決定直接採用標準專案結構：
+- `cmd/core/main.go`: 核心服務入口
+- `cmd/connector/main.go`: 連接器入口 (預留)
+- `internal/app/core/...`: 將 domain/usecase/adapter 全部封裝進去，避免 Connector 誤用。
+
+### 6. Clean Architecture 加強觀念 (CoreUseCase)
+在實作 gRPC Server 時，本來是直接依賴 `usecase.Ledger` (介面)。
+後來為了加強 Clean Architecture 的觀念，把結構改成：
+- **Repo Interface**: `usecase.Ledger` (定義存取介面)
+- **Interactor**: `usecase.CoreUseCase` (實作 application logic)
+- **Driver**: `grpc.NewServer` 依賴 `CoreUseCase` Struct
+這樣未來如果有額外的業務邏輯 (如風控、通知)，就可以在 `CoreUseCase` 這一層擴充，而不用去改 Repo。
