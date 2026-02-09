@@ -20,4 +20,7 @@ var (
 
 	// ErrSelectTransactionFailed 查詢交易失敗
 	ErrSelectTransactionFailed = errors.New("select transaction failed")
+
+	// ErrWALWriteFailed WAL寫入失敗
+	ErrWALWriteFailed = errors.New("WAL write failed")
 )

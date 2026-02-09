@@ -46,4 +46,23 @@ domain不該知道使用MySQL 這樣才符合Clean Architecture
 - **Repo Interface**: `usecase.Ledger` (定義存取介面)
 - **Interactor**: `usecase.CoreUseCase` (實作 application logic)
 - **Driver**: `grpc.NewServer` 依賴 `CoreUseCase` Struct
-這樣未來如果有額外的業務邏輯 (如風控、通知)，就可以在 `CoreUseCase` 這一層擴充，而不用去改 Repo。
+
+##  ~ 2026-02-09
+
+### 1. 新增Pkg WAL (Write-Ahead Logging)
+啟動時會先創建/讀取WAL檔案，然後將交易記錄寫入File中。
+
+### 2. Main.go 調整
+- 定義 LedgerType 常數 (MySQL, Mutex, LMAX) 跟 全域變數UsedLedgerType
+- 全域變數UsedLedgerType 預設為 Memory_Mutex
+
+### 3. 實作MemoryMutexLedger
+- 從MySQL載入帳戶資料帶入Ledger做暫存(記憶體)
+- 實作Ledger介面(記憶體+Mutex)
+- 將 WAL 整合至 `NewMutexLedger` 與 `PostTransaction` 流程中。
+- Postman grpc 測試 :
+  - 轉帳 存款 提款 成功 (有寫入wal.log)
+  - 關掉core重開 => 成功 (有從wal.log恢復資料) GetBlance驗證 帳號餘額正確
+
+心得：用記憶體還是怕怕的 然後目前還沒將資料寫回MySQL 之後做LMAX完再一起整理XD
+應該是額外定期將wal.log的交易資料 跟memory的餘額資料 寫回MySQL 然後再做刪除wal.log

@@ -13,5 +13,5 @@ type Ledger interface {
 	// GetAccountBalance 取得帳戶餘額
 	GetAccountBalance(ctx context.Context, accountID int64) (int64, error)
 	// LoadAllAccounts載入所有帳戶
-	// LoadAllAccounts(ctx context.Context) (map[int64]*domain.Account, error)
+	LoadAllAccounts(ctx context.Context) (map[int64]*domain.Account, error)
 }

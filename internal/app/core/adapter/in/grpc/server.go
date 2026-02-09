@@ -3,12 +3,13 @@ package grpc
 import (
 	"context"
 
-	"github.com/JoeShih716/go-mem-ledger/internal/app/core/domain"
-	"github.com/JoeShih716/go-mem-ledger/internal/app/core/usecase"
-	pb "github.com/JoeShih716/go-mem-ledger/proto"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/JoeShih716/go-mem-ledger/internal/app/core/domain"
+	"github.com/JoeShih716/go-mem-ledger/internal/app/core/usecase"
+	pb "github.com/JoeShih716/go-mem-ledger/proto"
 )
 
 type GrpcServer struct {

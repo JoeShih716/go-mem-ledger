@@ -26,3 +26,8 @@ func (c *CoreUseCase) PostTransaction(ctx context.Context, tran *domain.Transact
 func (c *CoreUseCase) GetAccountBalance(ctx context.Context, accountID int64) (int64, error) {
 	return c.ledger.GetAccountBalance(ctx, accountID)
 }
+
+// LoadAllAccounts 載入所有帳戶
+func (c *CoreUseCase) LoadAllAccounts(ctx context.Context) (map[int64]*domain.Account, error) {
+	return c.ledger.LoadAllAccounts(ctx)
+}
