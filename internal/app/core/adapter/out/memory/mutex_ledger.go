@@ -5,16 +5,26 @@ import (
 	"encoding/json"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/JoeShih716/go-mem-ledger/internal/app/core/domain"
 	"github.com/JoeShih716/go-mem-ledger/internal/app/core/usecase"
 	"github.com/JoeShih716/go-mem-ledger/pkg/wal"
 )
 
+// MutexLedger 是一個使用 Mutex 實現的帳本
+//
+// 結構:
+//
+//	accounts: 帳戶資料 Map
+//	mu: Mutex 用於保護帳戶資料
+//	processedTransactions: 已處理過的交易 Map
+//	wal: Write-Ahead Log 實例
 type MutexLedger struct {
 	accounts map[int64]*domain.Account
 	mu       sync.RWMutex
 	// 已處理過的交易
-	processedTransactions map[[16]byte]bool
+	processedTransactions map[uuid.UUID]bool
 	// Write-Ahead Logging
 	wal *wal.WAL
 }
@@ -34,7 +44,7 @@ func NewMutexLedger(accounts map[int64]*domain.Account, wal *wal.WAL) (*MutexLed
 	ledger := &MutexLedger{
 		accounts:              accounts,
 		mu:                    sync.RWMutex{},
-		processedTransactions: make(map[[16]byte]bool),
+		processedTransactions: make(map[uuid.UUID]bool),
 		wal:                   wal,
 	}
 	err := ledger.recoverFromWAL()
@@ -65,28 +75,30 @@ func (m *MutexLedger) recoverFromWAL() error {
 	}
 
 	for _, tran := range tranHistory {
-		if err := m.applyTransaction(&tran); err != nil {
+		if err := m.applyRecoverTransaction(&tran); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// applyTransaction 應用單筆交易至記憶體 (不寫入 WAL)
-// 用於 Recovery 階段或測試
-//
-// 參數:
-//
-//	tran: 交易物件
-//
-// 回傳:
-//
-//	error: 處理錯誤
-func (m *MutexLedger) applyTransaction(tran *domain.Transaction) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// applyRecoverTransaction 恢復單筆交易至記憶體 (不寫入 WAL)
+// 只有 NewMutexLedger 呼叫，無需 Lock (單執行緒)
+func (m *MutexLedger) applyRecoverTransaction(tran *domain.Transaction) error {
+	var err error
+	switch tran.Type {
+	case domain.TransactionTypeDeposit:
+		err = m.handleDeposit(tran)
+	case domain.TransactionTypeWithdraw:
+		err = m.handleWithdraw(tran)
+	case domain.TransactionTypeTransfer:
+		err = m.handleTransfer(tran)
+	}
 
-	return m.postTransactionInternal(tran, false) // false = don't write WAL
+	if err == nil {
+		m.processedTransactions[tran.TransactionID] = true
+	}
+	return err
 }
 
 // GetAccountBalance 取得指定帳戶的當前餘額
@@ -137,7 +149,7 @@ func (m *MutexLedger) LoadAllAccounts(ctx context.Context) (map[int64]*domain.Ac
 func (m *MutexLedger) PostTransaction(ctx context.Context, tran *domain.Transaction) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.postTransactionInternal(tran, true)
+	return m.postTransactionInternal(tran)
 }
 
 // postTransactionInternal 執行交易核心邏輯 (內部方法)
@@ -145,25 +157,32 @@ func (m *MutexLedger) PostTransaction(ctx context.Context, tran *domain.Transact
 // 參數:
 //
 //	tran: 交易物件
-//	writeWAL: 是否寫入 WAL (Recovery 時傳 false，正常交易傳 true)
 //
 // 回傳:
 //
 //	error: 處理錯誤
-func (m *MutexLedger) postTransactionInternal(tran *domain.Transaction, writeWAL bool) error {
+func (m *MutexLedger) postTransactionInternal(tran *domain.Transaction) error {
 	_, ok := m.processedTransactions[tran.TransactionID]
 	if ok {
 		return nil
 	}
-	// 核心交易分發
+
+	// 1. 寫入 WAL (Critical Path)
+	if m.wal != nil {
+		if err := m.wal.Write(tran); err != nil {
+			return domain.ErrWALWriteFailed
+		}
+	}
+
+	// 2. 核心交易分發
 	var err error
 	switch tran.Type {
 	case domain.TransactionTypeDeposit:
-		err = m.handleDeposit(tran, writeWAL)
+		err = m.handleDeposit(tran)
 	case domain.TransactionTypeWithdraw:
-		err = m.handleWithdraw(tran, writeWAL)
+		err = m.handleWithdraw(tran)
 	case domain.TransactionTypeTransfer:
-		err = m.handleTransfer(tran, writeWAL)
+		err = m.handleTransfer(tran)
 	default:
 		return nil // Unknown type, ignore or error
 	}
@@ -179,20 +198,14 @@ func (m *MutexLedger) postTransactionInternal(tran *domain.Transaction, writeWAL
 // 參數:
 //
 //	tran: 交易物件
-//	writeWAL: 是否寫入 WAL
 //
 // 回傳:
 //
 //	error: 處理錯誤
-func (m *MutexLedger) handleDeposit(tran *domain.Transaction, writeWAL bool) error {
+func (m *MutexLedger) handleDeposit(tran *domain.Transaction) error {
 	toAccount, ok := m.accounts[tran.To]
 	if !ok {
 		return domain.ErrAccountNotFound
-	}
-	if writeWAL {
-		if err := m.wal.Write(tran); err != nil {
-			return domain.ErrWALWriteFailed
-		}
 	}
 	return toAccount.Deposit(tran.Amount)
 }
@@ -202,24 +215,16 @@ func (m *MutexLedger) handleDeposit(tran *domain.Transaction, writeWAL bool) err
 // 參數:
 //
 //	tran: 交易物件
-//	writeWAL: 是否寫入 WAL
 //
 // 回傳:
 //
 //	error: 處理錯誤 (如餘額不足)
-func (m *MutexLedger) handleWithdraw(tran *domain.Transaction, writeWAL bool) error {
+func (m *MutexLedger) handleWithdraw(tran *domain.Transaction) error {
 	fromAccount, ok := m.accounts[tran.From]
 	if !ok {
 		return domain.ErrAccountNotFound
 	}
-	if fromAccount.Balance < tran.Amount {
-		return domain.ErrInsufficientBalance
-	}
-	if writeWAL {
-		if err := m.wal.Write(tran); err != nil {
-			return domain.ErrWALWriteFailed
-		}
-	}
+
 	return fromAccount.Withdraw(tran.Amount)
 }
 
@@ -228,12 +233,11 @@ func (m *MutexLedger) handleWithdraw(tran *domain.Transaction, writeWAL bool) er
 // 參數:
 //
 //	tran: 交易物件
-//	writeWAL: 是否寫入 WAL
 //
 // 回傳:
 //
 //	error: 處理錯誤 (如餘額不足)
-func (m *MutexLedger) handleTransfer(tran *domain.Transaction, writeWAL bool) error {
+func (m *MutexLedger) handleTransfer(tran *domain.Transaction) error {
 	fromAccount, ok := m.accounts[tran.From]
 	if !ok {
 		return domain.ErrAccountNotFound
@@ -242,14 +246,7 @@ func (m *MutexLedger) handleTransfer(tran *domain.Transaction, writeWAL bool) er
 	if !ok {
 		return domain.ErrAccountNotFound
 	}
-	if fromAccount.Balance < tran.Amount {
-		return domain.ErrInsufficientBalance
-	}
-	if writeWAL {
-		if err := m.wal.Write(tran); err != nil {
-			return domain.ErrWALWriteFailed
-		}
-	}
+
 	if err := fromAccount.Withdraw(tran.Amount); err != nil {
 		return err
 	}

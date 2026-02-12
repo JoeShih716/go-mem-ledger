@@ -1,5 +1,7 @@
 package domain
 
+import "github.com/google/uuid"
+
 // amount 使用int64，並定義精度：小數點後 4 位
 const (
 	CurrencyScale = 10000
@@ -31,7 +33,7 @@ type Transaction struct {
 	// CreatedAt: 交易時間
 	CreatedAt int64
 	// TransactionID: 外部追蹤號 (UUID)
-	TransactionID [16]byte
+	TransactionID uuid.UUID
 	// Type: 放到最後面，利用 Padding 空間
 	Type TransactionType
 }

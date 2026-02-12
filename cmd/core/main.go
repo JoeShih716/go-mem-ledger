@@ -31,14 +31,18 @@ const (
 )
 
 // UsedLedgerType 設定使用哪種 Ledger
-const UsedLedgerType LedgerType = LedgerType_Level1_Memory_Mutex
+const UsedLedgerType LedgerType = LedgerType_Level2_Memory_LMAX
 
 type Config struct {
 	MySQL mysql.Config `yaml:"mysql"`
 }
 
 func main() {
-	// 1. 載入設定
+	// 1. 設定 Graceful Shutdown Context
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// 2. 載入設定
 	cfg := loadConfig()
 
 	// 2. 初始化 MySQL Client (Base Infrastructure)
@@ -52,7 +56,7 @@ func main() {
 	// 3. 載入account
 	ledgerRepo := mysql_adapter.NewMySQLLedger(dbClient)
 
-	accounts, err := ledgerRepo.LoadAllAccounts(context.Background())
+	accounts, err := ledgerRepo.LoadAllAccounts(ctx)
 	if err != nil {
 		log.Fatalf("Failed to load all accounts: %v", err)
 	}
@@ -77,6 +81,22 @@ func main() {
 			log.Fatalf("Failed to init MutexLedger: %v", err)
 		}
 		usedLedger = mutexLedger
+	case LedgerType_Level2_Memory_LMAX:
+		// 初始化 WAL
+		walFile, err := wal.NewWAL("wal.log")
+		if err != nil {
+			log.Fatalf("Failed to init WAL: %v", err)
+		}
+		// 程式結束時關閉 WAL
+		// 注意：這裡 defer 會在 main 結束時執行，符合預期
+		defer walFile.Close()
+
+		lmaxLedger, err := memory_adapter.NewLMAXLedger(accounts, walFile)
+		if err != nil {
+			log.Fatalf("Failed to init LMAXLedger: %v", err)
+		}
+		lmaxLedger.Start(ctx)
+		usedLedger = lmaxLedger
 	default:
 		log.Fatalf("Invalid ledger type: %d", UsedLedgerType)
 	}
@@ -105,15 +125,15 @@ func main() {
 	}()
 
 	// Wait for interrupt
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	<-ctx.Done()
+	stop()
 	log.Println("Shutting down server...")
 
 	s.GracefulStop()
 	log.Println("Server exited")
 }
 
+// loadConfig 載入設定
 func loadConfig() Config {
 	cfgData, err := os.ReadFile("config/config.yaml")
 	if err != nil {

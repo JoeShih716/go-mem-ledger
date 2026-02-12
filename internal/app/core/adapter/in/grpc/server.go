@@ -25,14 +25,13 @@ func NewGrpcServer(core *usecase.CoreUseCase) *GrpcServer {
 
 func (s *GrpcServer) Transfer(ctx context.Context, req *pb.TransferRequest) (*pb.TransferResponse, error) {
 	// 1. UUID 解析
-	u, err := uuid.Parse(req.RefId)
+	uuid, err := uuid.Parse(req.RefId)
 	if err != nil {
 		return &pb.TransferResponse{
 			Success: false,
 			Message: "invalid ref_id: " + err.Error(),
 		}, nil
 	}
-
 	// 2. 轉換交易類型
 	var txType domain.TransactionType
 	switch req.Type {
@@ -52,7 +51,7 @@ func (s *GrpcServer) Transfer(ctx context.Context, req *pb.TransferRequest) (*pb
 	// 3. 組裝 Domain Transaction
 	// domain.TransactionID 是 [16]byte, uuid.UUID 是 [16]byte
 	tx := &domain.Transaction{
-		TransactionID: u,
+		TransactionID: uuid,
 		From:          req.FromAccountId,
 		To:            req.ToAccountId,
 		Amount:        req.Amount,

@@ -18,6 +18,27 @@ type sqlUser struct {
 	UpdatedAt int64 `gorm:"autoUpdateTime:milli"` // 自動更新時間
 }
 
+// Deposit 存款
+func (u *sqlUser) Deposit(amount int64) error {
+	if amount < 0 {
+		return domain.ErrAmountMustBePositive
+	}
+	u.Balance += amount
+	return nil
+}
+
+// Withdraw 提款
+func (u *sqlUser) Withdraw(amount int64) error {
+	if amount < 0 {
+		return domain.ErrAmountMustBePositive
+	}
+	if u.Balance < amount {
+		return domain.ErrInsufficientBalance
+	}
+	u.Balance -= amount
+	return nil
+}
+
 func (*sqlUser) TableName() string {
 	return "users"
 }
@@ -69,14 +90,14 @@ func NewMySQLLedger(client *mysql.Client) *MySQLLedger {
 //	error: 處理錯誤，若成功則為 nil
 func (ledger *MySQLLedger) PostTransaction(ctx context.Context, tran *domain.Transaction) error {
 	return ledger.client.DB().Transaction(func(tx *gorm.DB) error {
-		// 1. Idempotency Check
+		// 1. Idempotency Check 冪等性檢查
 		if exists, err := ledger.checkTransactionExists(tx, tran); err != nil {
 			return err
 		} else if exists {
 			return nil
 		}
 
-		// 2. Lock & Load Accounts
+		// 2. Lock & Load Accounts 悲觀鎖載入
 		users, userMap, err := ledger.lockAccounts(tx, tran)
 		if err != nil {
 			return err
@@ -87,12 +108,12 @@ func (ledger *MySQLLedger) PostTransaction(ctx context.Context, tran *domain.Tra
 			return err
 		}
 
-		// 4. Update Accounts
+		// 4. Update Accounts 更新帳戶
 		if err := ledger.saveUsers(tx, users); err != nil {
 			return err
 		}
 
-		// 5. Create Transaction Record
+		// 5. Create Transaction Record 建立交易記錄
 		return ledger.createTransactionLog(tx, tran)
 	})
 }
@@ -183,8 +204,7 @@ func (ledger *MySQLLedger) handleDeposit(tran *domain.Transaction, userMap map[i
 	if !ok {
 		return domain.ErrAccountNotFound
 	}
-	toUser.Balance += tran.Amount
-	return nil
+	return toUser.Deposit(tran.Amount)
 }
 
 // handleWithdraw 處理提款邏輯
@@ -202,11 +222,7 @@ func (ledger *MySQLLedger) handleWithdraw(tran *domain.Transaction, userMap map[
 	if !ok {
 		return domain.ErrAccountNotFound
 	}
-	if fromUser.Balance < tran.Amount {
-		return domain.ErrInsufficientBalance
-	}
-	fromUser.Balance -= tran.Amount
-	return nil
+	return fromUser.Withdraw(tran.Amount)
 }
 
 // handleTransfer 處理轉帳邏輯
@@ -228,11 +244,13 @@ func (ledger *MySQLLedger) handleTransfer(tran *domain.Transaction, userMap map[
 	if !ok {
 		return domain.ErrAccountNotFound
 	}
-	if fromUser.Balance < tran.Amount {
-		return domain.ErrInsufficientBalance
+	// 先扣再加款
+	if err := fromUser.Withdraw(tran.Amount); err != nil {
+		return err
 	}
-	fromUser.Balance -= tran.Amount
-	toUser.Balance += tran.Amount
+	if err := toUser.Deposit(tran.Amount); err != nil {
+		return err
+	}
 	return nil
 }
 

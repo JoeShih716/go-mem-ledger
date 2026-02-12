@@ -64,5 +64,26 @@ domain不該知道使用MySQL 這樣才符合Clean Architecture
   - 轉帳 存款 提款 成功 (有寫入wal.log)
   - 關掉core重開 => 成功 (有從wal.log恢復資料) GetBlance驗證 帳號餘額正確
 
-心得：用記憶體還是怕怕的 然後目前還沒將資料寫回MySQL 之後做LMAX完再一起整理XD
+心得：用記憶體還是怕怕的 然後目前還沒將資料寫回MySQL 之後最後整合完再一起整理XD
 應該是額外定期將wal.log的交易資料 跟memory的餘額資料 寫回MySQL 然後再做刪除wal.log
+
+
+##  ~ 2026-02-12
+
+### 1. 實作MemoryLMAXLedger
+- 實作Ledger介面(記憶體+LMAX)
+  - 流程跟實作MemoryMutexLedger 很接近（起始從WAL撈取過往交易資料做復原）
+    從MutexLedger切換過來繼續使用同一份資料
+  - 無鎖設計 (Lock-Free)：使用 Go Channel 作為輸送帶 (Buffer 1000)，搭配單一 Goroutine 迴圈處理交易。
+- 將 WAL 整合至 `NewMemoryLMAXLedger` 與 `PostTransaction` 流程中。
+- Postman grpc 測試 :
+  - 轉帳 存款 提款 成功 (有寫入wal.log)
+  - 關掉core重開 => 成功 (有從wal.log恢復資料) GetBlance驗證 帳號餘額正確
+
+- domain 調整
+  - TransactionID [16]byte => uuid.UUID
+  - wal.log 儲存格式 TransactionID 從 [1, 23, 225...] => "01773456-7890-1234-5678-90abcdef1234"
+
+心得：因為MemoryLMAXLedger 需要另外啟動一個goroutine來處理交易，所以多了一個
+`func (l *LMAXLedger) Start(ctx context.Context)`來啟動，不包裝在NewMemoryLMAXLedger裡面，是考慮到 Graceful Shutdown
+目前交易還沒做Batch ＋ 每個交易 wal都會執行寫入.log 效能會受影響 後續連同Batch再一起優化
