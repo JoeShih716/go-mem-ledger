@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -11,6 +12,9 @@ import (
 	"github.com/JoeShih716/go-mem-ledger/internal/app/core/usecase"
 	"github.com/JoeShih716/go-mem-ledger/pkg/wal"
 )
+
+// 交易紀錄保留時間，預設 60 分鐘
+const transactionRecordWindow = 60 * time.Minute
 
 // transactionRequest 交易請求包裝channel，讓PostTransaction可以等待結果
 type transactionRequest struct {
@@ -21,7 +25,7 @@ type transactionRequest struct {
 type LMAXLedger struct {
 	accounts map[int64]*domain.Account
 	// 已處理過的交易
-	processedTransactions map[uuid.UUID]bool
+	processedTransactions map[uuid.UUID]time.Time
 	// Write-Ahead Logging
 	wal *wal.WAL
 	// 輸送帶 負責接收交易
@@ -43,7 +47,7 @@ type LMAXLedger struct {
 func NewLMAXLedger(accounts map[int64]*domain.Account, wal *wal.WAL) (*LMAXLedger, error) {
 	ledger := &LMAXLedger{
 		accounts:              accounts, // 直接引用傳入的 Map
-		processedTransactions: make(map[uuid.UUID]bool),
+		processedTransactions: make(map[uuid.UUID]time.Time),
 		wal:                   wal,
 		transactionChan:       make(chan *transactionRequest, 1000), // Buffer 1000
 		requestPool: sync.Pool{
@@ -82,9 +86,9 @@ func (l *LMAXLedger) recoverFromWAL() error {
 	if err != nil {
 		return err
 	}
-
+	now := time.Now()
 	for _, tran := range tranHistory {
-		if err := l.applyRecoverTransaction(&tran); err != nil {
+		if err := l.applyRecoverTransaction(&tran, now); err != nil {
 			return err
 		}
 	}
@@ -92,7 +96,7 @@ func (l *LMAXLedger) recoverFromWAL() error {
 }
 
 // applyRecoverTransaction 恢復單筆交易 (不寫 WAL，不透過 Channel)
-func (l *LMAXLedger) applyRecoverTransaction(tran *domain.Transaction) error {
+func (l *LMAXLedger) applyRecoverTransaction(tran *domain.Transaction, now time.Time) error {
 	// 直接更新 State，不需要 Lock 因為這是在 NewLMAXLedger 裡跑的 (單執行緒)
 	var err error
 	switch tran.Type {
@@ -105,7 +109,7 @@ func (l *LMAXLedger) applyRecoverTransaction(tran *domain.Transaction) error {
 	}
 
 	if err == nil {
-		l.processedTransactions[tran.TransactionID] = true
+		l.processedTransactions[tran.TransactionID] = now
 	}
 	return err
 }
@@ -172,6 +176,9 @@ func (l *LMAXLedger) Start(ctx context.Context) {
 }
 
 func (l *LMAXLedger) run(ctx context.Context) {
+	// 1 分鐘檢查一次
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -180,6 +187,13 @@ func (l *LMAXLedger) run(ctx context.Context) {
 			return
 		case req := <-l.transactionChan:
 			l.processTransaction(req)
+		case <-ticker.C:
+			now := time.Now()
+			for txID, txTime := range l.processedTransactions {
+				if now.Sub(txTime) > transactionRecordWindow {
+					delete(l.processedTransactions, txID)
+				}
+			}
 		}
 	}
 }
@@ -198,7 +212,6 @@ func (l *LMAXLedger) drain() {
 // processTransaction 處理單筆交易並回傳結果
 func (l *LMAXLedger) processTransaction(req *transactionRequest) {
 	tran := req.Tx
-
 	// 0. Idempotency Check (Thread Safe in Loop)
 	if _, ok := l.processedTransactions[tran.TransactionID]; ok {
 		req.Result <- nil
@@ -228,7 +241,7 @@ func (l *LMAXLedger) processTransaction(req *transactionRequest) {
 
 	// 3. 更新 Idempotency
 	if err == nil {
-		l.processedTransactions[tran.TransactionID] = true
+		l.processedTransactions[tran.TransactionID] = time.Now()
 	}
 
 	// 4. 回傳結果

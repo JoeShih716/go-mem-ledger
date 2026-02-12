@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -24,7 +25,7 @@ type MutexLedger struct {
 	accounts map[int64]*domain.Account
 	mu       sync.RWMutex
 	// 已處理過的交易
-	processedTransactions map[uuid.UUID]bool
+	processedTransactions map[uuid.UUID]time.Time
 	// Write-Ahead Logging
 	wal *wal.WAL
 }
@@ -44,7 +45,7 @@ func NewMutexLedger(accounts map[int64]*domain.Account, wal *wal.WAL) (*MutexLed
 	ledger := &MutexLedger{
 		accounts:              accounts,
 		mu:                    sync.RWMutex{},
-		processedTransactions: make(map[uuid.UUID]bool),
+		processedTransactions: make(map[uuid.UUID]time.Time),
 		wal:                   wal,
 	}
 	err := ledger.recoverFromWAL()
@@ -73,9 +74,9 @@ func (m *MutexLedger) recoverFromWAL() error {
 	if err != nil {
 		return err
 	}
-
+	now := time.Now()
 	for _, tran := range tranHistory {
-		if err := m.applyRecoverTransaction(&tran); err != nil {
+		if err := m.applyRecoverTransaction(&tran, now); err != nil {
 			return err
 		}
 	}
@@ -84,7 +85,7 @@ func (m *MutexLedger) recoverFromWAL() error {
 
 // applyRecoverTransaction 恢復單筆交易至記憶體 (不寫入 WAL)
 // 只有 NewMutexLedger 呼叫，無需 Lock (單執行緒)
-func (m *MutexLedger) applyRecoverTransaction(tran *domain.Transaction) error {
+func (m *MutexLedger) applyRecoverTransaction(tran *domain.Transaction, now time.Time) error {
 	var err error
 	switch tran.Type {
 	case domain.TransactionTypeDeposit:
@@ -96,7 +97,7 @@ func (m *MutexLedger) applyRecoverTransaction(tran *domain.Transaction) error {
 	}
 
 	if err == nil {
-		m.processedTransactions[tran.TransactionID] = true
+		m.processedTransactions[tran.TransactionID] = now
 	}
 	return err
 }
@@ -188,7 +189,7 @@ func (m *MutexLedger) postTransactionInternal(tran *domain.Transaction) error {
 	}
 
 	if err == nil {
-		m.processedTransactions[tran.TransactionID] = true
+		m.processedTransactions[tran.TransactionID] = time.Now()
 	}
 	return err
 }

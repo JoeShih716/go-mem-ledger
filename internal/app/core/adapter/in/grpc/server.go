@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -56,6 +57,7 @@ func (s *GrpcServer) Transfer(ctx context.Context, req *pb.TransferRequest) (*pb
 		To:            req.ToAccountId,
 		Amount:        req.Amount,
 		Type:          txType,
+		CreatedAt:     time.Now().UnixMilli(),
 	}
 
 	// 4. 執行交易
