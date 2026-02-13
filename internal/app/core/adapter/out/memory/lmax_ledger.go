@@ -16,6 +16,10 @@ import (
 // 交易紀錄保留時間，預設 60 分鐘
 const transactionRecordWindow = 60 * time.Minute
 
+// Batch 設定
+const BatchSize = 100                      // 每 100 筆 刷一次
+const BatchTimeout = 10 * time.Millisecond // 或每 10ms 刷一次
+
 // transactionRequest 交易請求包裝channel，讓PostTransaction可以等待結果
 type transactionRequest struct {
 	Tx     *domain.Transaction
@@ -26,10 +30,8 @@ type LMAXLedger struct {
 	accounts map[int64]*domain.Account
 	// 已處理過的交易
 	processedTransactions map[uuid.UUID]time.Time
-	// Write-Ahead Logging
-	wal *wal.WAL
-	// 輸送帶 負責接收交易
-	transactionChan chan *transactionRequest
+	wal                   *wal.WAL
+	transactionChan       chan *transactionRequest
 	// Pool 減少 GC 壓力
 	requestPool sync.Pool
 }
@@ -49,7 +51,7 @@ func NewLMAXLedger(accounts map[int64]*domain.Account, wal *wal.WAL) (*LMAXLedge
 		accounts:              accounts, // 直接引用傳入的 Map
 		processedTransactions: make(map[uuid.UUID]time.Time),
 		wal:                   wal,
-		transactionChan:       make(chan *transactionRequest, 1000), // Buffer 1000
+		transactionChan:       make(chan *transactionRequest, 1000),
 		requestPool: sync.Pool{
 			New: func() interface{} {
 				return &transactionRequest{
@@ -59,7 +61,6 @@ func NewLMAXLedger(accounts map[int64]*domain.Account, wal *wal.WAL) (*LMAXLedge
 		},
 	}
 
-	// 在啟動前先恢復資料
 	if err := ledger.recoverFromWAL(); err != nil {
 		return nil, err
 	}
@@ -176,6 +177,9 @@ func (l *LMAXLedger) Start(ctx context.Context) {
 }
 
 func (l *LMAXLedger) run(ctx context.Context) {
+	batch := make([]*transactionRequest, 0, BatchSize)
+	timer := time.NewTimer(BatchTimeout)
+	defer timer.Stop()
 	// 1 分鐘檢查一次
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -186,7 +190,18 @@ func (l *LMAXLedger) run(ctx context.Context) {
 			l.drain()
 			return
 		case req := <-l.transactionChan:
-			l.processTransaction(req)
+			batch = append(batch, req)
+			if len(batch) >= BatchSize {
+				l.processBatch(batch)
+				batch = batch[:0]
+				timer.Reset(BatchTimeout)
+			}
+		case <-timer.C:
+			if len(batch) > 0 {
+				l.processBatch(batch)
+				batch = batch[:0]
+			}
+			timer.Reset(BatchTimeout)
 		case <-ticker.C:
 			now := time.Now()
 			for txID, txTime := range l.processedTransactions {
@@ -198,35 +213,85 @@ func (l *LMAXLedger) run(ctx context.Context) {
 	}
 }
 
+// drain 處理剩餘的交易 (關機時)
 func (l *LMAXLedger) drain() {
+	// 收集所有剩餘的 request
+	batch := make([]*transactionRequest, 0, BatchSize)
+
 	for {
 		select {
 		case req := <-l.transactionChan:
-			l.processTransaction(req)
+			batch = append(batch, req)
+			if len(batch) >= BatchSize {
+				l.processBatch(batch)
+				batch = batch[:0]
+			}
 		default:
+			if len(batch) > 0 {
+				l.processBatch(batch)
+			}
 			return
 		}
 	}
 }
 
-// processTransaction 處理單筆交易並回傳結果
-func (l *LMAXLedger) processTransaction(req *transactionRequest) {
-	tran := req.Tx
-	// 0. Idempotency Check (Thread Safe in Loop)
-	if _, ok := l.processedTransactions[tran.TransactionID]; ok {
-		req.Result <- nil
+// processBatch 批次處理交易 (Group Commit)
+// 1. 預先篩選出「真正需要處理」的交易
+// 2. 寫入 WAL Buffer
+// 3. Flush
+// 4. 執行記憶體邏輯 & 回覆
+func (l *LMAXLedger) processBatch(batch []*transactionRequest) {
+	// 1.預先篩選出「真正需要處理」的交易
+	validRequests := make([]*transactionRequest, 0, len(batch))
+	// 考慮batch 中可能有重複的交易，使用 map 來檢查
+	batchSeen := make(map[uuid.UUID]struct{})
+	for _, req := range batch {
+		// 冪等性檢查
+		if _, ok := l.processedTransactions[req.Tx.TransactionID]; ok {
+			req.Result <- nil
+			continue
+		}
+		// 檢查 Batch 內部是否已經有這個 ID
+		if _, ok := batchSeen[req.Tx.TransactionID]; ok {
+			req.Result <- nil
+			continue
+		}
+		batchSeen[req.Tx.TransactionID] = struct{}{}
+		validRequests = append(validRequests, req)
+	}
+	// 0筆 直接結束
+	if len(validRequests) == 0 {
 		return
 	}
-
-	// 1. 寫入 WAL (Critical Path)
+	// 2. 寫入 WAL Buffer
 	if l.wal != nil {
-		if err := l.wal.Write(tran); err != nil {
-			req.Result <- domain.ErrWALWriteFailed
+		for _, req := range validRequests {
+			if err := l.wal.Write(req.Tx); err != nil {
+				req.Result <- domain.ErrWALWriteFailed
+				break
+			}
+		}
+
+		// 3. Flush
+		if err := l.wal.Flush(); err != nil {
+			for _, req := range batch {
+				req.Result <- domain.ErrWALWriteFailed
+			}
 			return
 		}
 	}
 
-	// 2. 執行業務邏輯 (Deposit/Withdraw)
+	// 4. 執行記憶體邏輯 & 回覆
+	for _, req := range validRequests {
+		l.processTransactionRequest(req)
+	}
+}
+
+// processTransactionRequest 處理記憶體邏輯
+func (l *LMAXLedger) processTransactionRequest(req *transactionRequest) {
+	tran := req.Tx
+
+	// 執行業務邏輯
 	var err error
 	switch tran.Type {
 	case domain.TransactionTypeDeposit:
@@ -236,15 +301,13 @@ func (l *LMAXLedger) processTransaction(req *transactionRequest) {
 	case domain.TransactionTypeTransfer:
 		err = l.handleTransfer(tran)
 	default:
-		err = nil // Unknown type or no-op
+		err = nil
 	}
-
-	// 3. 更新 Idempotency
+	// 更新 Idempotency (加上時間)
 	if err == nil {
 		l.processedTransactions[tran.TransactionID] = time.Now()
 	}
-
-	// 4. 回傳結果
+	// 回傳結果
 	req.Result <- err
 }
 

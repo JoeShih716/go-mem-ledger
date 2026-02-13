@@ -42,10 +42,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 2. 載入設定
 	cfg := loadConfig()
 
-	// 2. 初始化 MySQL Client (Base Infrastructure)
+	// 初始化 MySQL Client (Base Infrastructure)
 	dbClient, err := mysql.NewClient(cfg.MySQL)
 	if err != nil {
 		log.Fatalf("Failed to connect to MySQL: %v", err)
@@ -53,7 +52,7 @@ func main() {
 	defer dbClient.Close()
 	log.Println("Connected to MySQL successfully")
 
-	// 3. 載入account
+	// 載入account
 	ledgerRepo := mysql_adapter.NewMySQLLedger(dbClient)
 
 	accounts, err := ledgerRepo.LoadAllAccounts(ctx)
@@ -68,12 +67,10 @@ func main() {
 		usedLedger = ledgerRepo
 	case LedgerType_Level1_Memory_Mutex:
 		// 初始化 WAL
-		walFile, err := wal.NewWAL("wal.log")
+		walFile, err := wal.NewWAL("wal.log", 0)
 		if err != nil {
 			log.Fatalf("Failed to init WAL: %v", err)
 		}
-		// 程式結束時關閉 WAL
-		// 注意：這裡 defer 會在 main 結束時執行，符合預期
 		defer walFile.Close()
 
 		mutexLedger, err := memory_adapter.NewMutexLedger(accounts, walFile)
@@ -82,13 +79,10 @@ func main() {
 		}
 		usedLedger = mutexLedger
 	case LedgerType_Level2_Memory_LMAX:
-		// 初始化 WAL
-		walFile, err := wal.NewWAL("wal.log")
+		walFile, err := wal.NewWAL("wal.log", 0)
 		if err != nil {
 			log.Fatalf("Failed to init WAL: %v", err)
 		}
-		// 程式結束時關閉 WAL
-		// 注意：這裡 defer 會在 main 結束時執行，符合預期
 		defer walFile.Close()
 
 		lmaxLedger, err := memory_adapter.NewLMAXLedger(accounts, walFile)
@@ -100,10 +94,10 @@ func main() {
 	default:
 		log.Fatalf("Invalid ledger type: %d", UsedLedgerType)
 	}
-	// 4. 初始化 UseCase
+	// 初始化 UseCase
 	coreUseCase := usecase.NewCoreUseCase(usedLedger)
 
-	// 5. 初始化 gRPC Adapter (Driving Adapter)
+	// 初始化 gRPC Adapter (Driving Adapter)
 	grpcServer := grpc_adapter.NewGrpcServer(coreUseCase)
 
 	// 6. 啟動 gRPC Server

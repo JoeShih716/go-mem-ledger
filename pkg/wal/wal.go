@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bufio"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -19,23 +20,33 @@ const (
 	FileModePrivate fs.FileMode = 0600
 )
 
+const (
+	DefaultBufferSize = 64 * 1024 // 64KB Buffer
+)
+
 type WAL struct {
-	file *os.File
-	mu   sync.Mutex
+	file   *os.File
+	writer *bufio.Writer
+	mu     sync.Mutex
 }
 
 // NewWAL 開啟或建立一個 WAL 檔案
+// 帶0 則使用預設值DefaultBufferSize = 64KB
 // O_RDWR讀寫模式
 // O_APPEND 每次寫入時自動跳到文件末尾
 // O_CREATE 如果文件不存在則建立
-func NewWAL(path string) (*WAL, error) {
+func NewWAL(path string, bufferSize int) (*WAL, error) {
 	// 提示: os.OpenFile with O_APPEND|O_CREATE|O_RDWR
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, FileModeReadOnly)
 	if err != nil {
 		return nil, err
 	}
+	if bufferSize <= 0 {
+		bufferSize = DefaultBufferSize
+	}
 	return &WAL{file: file,
-		mu: sync.Mutex{},
+		mu:     sync.Mutex{},
+		writer: bufio.NewWriterSize(file, bufferSize),
 	}, nil
 }
 
@@ -43,14 +54,19 @@ func NewWAL(path string) (*WAL, error) {
 func (w *WAL) Write(v any) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err := json.NewEncoder(w.file).Encode(v); err != nil {
+	if err := json.NewEncoder(w.writer).Encode(v); err != nil {
 		return err
 	}
-	return w.file.Sync()
+	return nil
 }
 
-// Sync 強制刷入硬碟 (關鍵！)
-func (w *WAL) Sync() error {
+// Flush 將緩衝區的資料刷入硬碟
+func (w *WAL) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.writer.Flush(); err != nil {
+		return err
+	}
 	return w.file.Sync()
 }
 

@@ -97,8 +97,6 @@ func (p *Pool) GetConnection(target string, opts ...grpc.DialOption) (*grpc.Clie
 	}
 
 	finalOpts := append(defaultOpts, opts...)
-
-	// 注意: 在新版 gRPC 中，grpc.NewClient 取代了 DialContext
 	// 這裡建立的是一個「虛擬連線」，真正的網路連線會在第一次呼叫時才建立 (Lazy connection)
 	conn, err := grpc.NewClient(target, finalOpts...)
 	if err != nil {

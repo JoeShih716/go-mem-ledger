@@ -170,7 +170,13 @@ func (m *MutexLedger) postTransactionInternal(tran *domain.Transaction) error {
 
 	// 1. 寫入 WAL (Critical Path)
 	if m.wal != nil {
+		// 寫入記憶體
 		if err := m.wal.Write(tran); err != nil {
+			return domain.ErrWALWriteFailed
+		}
+
+		// 刷入硬碟
+		if err := m.wal.Flush(); err != nil {
 			return domain.ErrWALWriteFailed
 		}
 	}
