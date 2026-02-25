@@ -74,24 +74,24 @@ func NewLMAXLedger(accounts map[int64]*domain.Account, wal *wal.WAL) (*LMAXLedge
 //
 //	error: 恢復過程錯誤
 func (l *LMAXLedger) recoverFromWAL() error {
-	tranHistory := make([]domain.Transaction, 0)
+	now := time.Now()
 
+	// ReadAll 透過 callback 一筆一筆拋出資料
 	err := l.wal.ReadAll(func(jsonRaw []byte) error {
 		var tran domain.Transaction
 		if err := json.Unmarshal(jsonRaw, &tran); err != nil {
 			return err
 		}
-		tranHistory = append(tranHistory, tran)
+
+		// 讀一筆，做一筆
+		if err := l.applyRecoverTransaction(&tran, now); err != nil {
+			return err // 如果執行失敗，中斷恢復過程
+		}
 		return nil
 	})
+
 	if err != nil {
 		return err
-	}
-	now := time.Now()
-	for _, tran := range tranHistory {
-		if err := l.applyRecoverTransaction(&tran, now); err != nil {
-			return err
-		}
 	}
 	return nil
 }
